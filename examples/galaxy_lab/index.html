@@ -1,0 +1,373 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Galaxy Lab</title>
+<style>
+	html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: system-ui, sans-serif; color: #d8dcf0; }
+	.panel { position: absolute; background: rgba(8, 10, 22, 0.8); border: 1px solid #2c3354; border-radius: 8px; padding: 12px; font-size: 13px; }
+	#ui { top: 12px; left: 12px; width: 260px; }
+	#ui h1 { margin: 0 0 2px; font-size: 19px; color: #fff; }
+	#ui .sub { color: #8a93b8; margin-bottom: 8px; }
+	#ui button { margin: 3px 2px 0 0; padding: 5px 9px; background: #1c2240; color: #d8dcf0; border: 1px solid #3a4470; border-radius: 5px; cursor: pointer; }
+	#ui button:hover { background: #2a3260; }
+	#ui button.on { background: #4a3a10; border-color: #c9a227; }
+	#ui label { display: block; margin-top: 8px; }
+	#ui input[type=range] { width: 100%; }
+	#time { font-size: 16px; color: #ffe08a; margin: 4px 0; font-variant-numeric: tabular-nums; }
+	.help { margin-top: 10px; color: #8a93b8; line-height: 1.5; }
+	#info { top: 12px; right: 12px; width: 290px; display: none; line-height: 1.55; }
+	#info b { color: #fff; }
+	#t4box { right: 12px; bottom: 12px; width: 340px; height: 370px; padding: 0; display: none; }
+	#t4box canvas { border-radius: 8px; }
+	.cap { position: absolute; left: 10px; right: 10px; font-size: 11px; color: #8a93b8; pointer-events: none; }
+	#snailbox { left: 12px; bottom: 12px; padding: 0; }
+	#loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 18px; color: #8a93b8; }
+</style>
+<script type="importmap">
+{ "imports": {
+	"three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+	"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="loading">loading the galaxy...</div>
+<div id="ui" class="panel">
+	<h1>Galaxy Lab</h1>
+	<div class="sub">every star is on its own torus (PytTorus)</div>
+	<div id="time">t = 0 Myr</div>
+	<label>speed: <span id="speedv">30</span> Myr per second<input id="speed" type="range" min="-200" max="200" value="30"></label>
+	<button id="pause">pause</button><button id="jump">+1 Gyr</button><button id="back">-1 Gyr</button><br>
+	<button id="kick">kick the disc</button><button id="follow">follow the sun</button>
+	<label><input id="trail" type="checkbox" checked> orbit trail</label>
+	<label><input id="halo" type="checkbox" checked> halo stars</label>
+	<div class="help">drag = rotate, scroll = zoom, right drag = pan<br>click a star for its orbit and its 4d torus<br>keys: space pause, k kick, f follow</div>
+</div>
+<div id="info" class="panel"></div>
+<div id="t4box" class="panel"><div class="cap" style="top: 8px">the selected star's torus in 4d phase space<br>(R, v<sub>R</sub>) around the ring, (z, v<sub>z</sub>) around the tube, colour = v<sub>z</sub></div><div id="t4fit" class="cap" style="bottom: 8px"></div></div>
+<div id="snailbox" class="panel"><canvas id="snail" width="300" height="300"></canvas><div class="cap" style="top: 6px">local stars: z vs v<sub>z</sub> (kick the disc!)</div></div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const TWO_PI = 2 * Math.PI;
+const KMS = 1.0227298434721328e-3;    // 1 km/s in kpc/Myr
+const NAMES = ['disc star', 'local star', 'halo star', 'the sun'];
+
+const meta = await (await fetch('/api/meta')).json();
+const tables = new Float32Array(await (await fetch('/api/tables')).arrayBuffer());
+const N = meta.n, G = meta.G, om = meta.omega, th0 = meta.theta0, kind = meta.kind, SUN = meta.sun;
+const firstHalo = kind.indexOf(2) < 0 ? N : kind.indexOf(2);
+document.getElementById('loading').remove();
+
+// ---------------- the main scene ----------------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.05, 3000);
+camera.position.set(0, 13, 23);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+// soft round sprite so stars glow instead of being squares
+function glowTexture() {
+	const c = document.createElement('canvas');
+	c.width = c.height = 64;
+	const g = c.getContext('2d');
+	const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+	grad.addColorStop(0, 'rgba(255,255,255,1)');
+	grad.addColorStop(0.2, 'rgba(255,255,255,0.85)');
+	grad.addColorStop(1, 'rgba(255,255,255,0)');
+	g.fillStyle = grad;
+	g.fillRect(0, 0, 64, 64);
+	return new THREE.CanvasTexture(c);
+}
+const glow = glowTexture();
+
+// far away background stars so it feels like space
+{
+	const n = 5000, bp = new Float32Array(3 * n);
+	for (let i = 0; i < n; i++) {
+		const u = Math.random() * 2 - 1, a = Math.random() * TWO_PI, s = Math.sqrt(1 - u * u);
+		bp.set([800 * s * Math.cos(a), 800 * u, 800 * s * Math.sin(a)], 3 * i);
+	}
+	const bg = new THREE.BufferGeometry();
+	bg.setAttribute('position', new THREE.BufferAttribute(bp, 3));
+	scene.add(new THREE.Points(bg, new THREE.PointsMaterial({ size: 1.3, color: 0x7f8db8, sizeAttenuation: false })));
+}
+
+// galactic centre and a faint grid in the disc plane (circles every 2 kpc)
+const bulge = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: 0xffc27a, blending: THREE.AdditiveBlending, depthWrite: false }));
+bulge.scale.set(6, 6, 1);
+scene.add(bulge);
+const grid = new THREE.PolarGridHelper(16, 12, 8, 96, 0x1d2850, 0x141c38);
+grid.material.transparent = true;
+grid.material.opacity = 0.5;
+scene.add(grid);
+
+// colour local stars by Jz so the 3d view and the phase spiral match
+function plasma(x) {
+	x = Math.min(Math.max(x, 0), 1);
+	return new THREE.Color().setHSL(0.75 - 0.65 * x, 0.9, 0.45 + 0.2 * x);
+}
+
+// the stars
+const pos = new Float32Array(3 * N), col = new Float32Array(3 * N);
+const geo = new THREE.BufferGeometry();
+geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1000);    // positions move every frame
+const stars = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.3, map: glow, vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+scene.add(stars);
+for (let k = 0; k < N; k++) {
+	let c = new THREE.Color(0xa8c8ff);
+	if (kind[k] === 1) c = plasma(meta.J[k][1] / 45);
+	if (kind[k] === 2) c = new THREE.Color(0xff8a5c);
+	if (kind[k] === 3) c = new THREE.Color(0xffe066);
+	col.set([c.r, c.g, c.b], 3 * k);
+}
+const sun = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: 0xffe066, blending: THREE.AdditiveBlending, depthWrite: false }));
+sun.scale.set(1.1, 1.1, 1);
+scene.add(sun);
+const ring = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: 0x66ffcc, blending: THREE.AdditiveBlending, depthWrite: false }));
+ring.scale.set(1.2, 1.2, 1);
+ring.visible = false;
+scene.add(ring);
+
+// ---------------- the torus trick ----------------
+// bilinear lookup in star k's periodic table over (theta_R, theta_z): gives R, z, dphi, vz
+const tmp = new Float32Array(4);
+function lookup(k, thR, thZ, out) {
+	const u = (((thR % TWO_PI) + TWO_PI) % TWO_PI) / TWO_PI * G;
+	const v = (((thZ % TWO_PI) + TWO_PI) % TWO_PI) / TWO_PI * G;
+	const i0 = Math.floor(u) % G, j0 = Math.floor(v) % G, i1 = (i0 + 1) % G, j1 = (j0 + 1) % G;
+	const fu = u - Math.floor(u), fv = v - Math.floor(v), b = k * G * G * 4;
+	for (let c = 0; c < 4; c++) {
+		const a00 = tables[b + (i0 * G + j0) * 4 + c], a10 = tables[b + (i1 * G + j0) * 4 + c];
+		const a01 = tables[b + (i0 * G + j1) * 4 + c], a11 = tables[b + (i1 * G + j1) * 4 + c];
+		out[c] = (a00 * (1 - fu) + a10 * fu) * (1 - fv) + (a01 * (1 - fu) + a11 * fu) * fv;
+	}
+}
+
+// angles just tick forward: theta = theta0 + omega t. returns three.js coords (y is up)
+function starAt(k, t, out) {
+	lookup(k, th0[k][0] + om[k][0] * t, th0[k][1] + om[k][1] * t, tmp);
+	const phi = th0[k][2] + om[k][2] * t + tmp[2];
+	out[0] = tmp[0] * Math.cos(phi);
+	out[1] = tmp[1];
+	out[2] = -tmp[0] * Math.sin(phi);
+	out[3] = tmp[3];
+	return out;
+}
+
+// ---------------- controls ----------------
+let t = 0, speed = 30, paused = false, follow = false, sel = -1;
+const $ = id => document.getElementById(id);
+$('speed').oninput = e => { speed = +e.target.value; $('speedv').textContent = speed; };
+$('pause').onclick = () => { paused = !paused; $('pause').classList.toggle('on', paused); };
+$('jump').onclick = () => { t += 1000; drawTrail(); };
+$('back').onclick = () => { t -= 1000; drawTrail(); };
+$('kick').onclick = () => kick();
+$('follow').onclick = () => { follow = !follow; $('follow').classList.toggle('on', follow); };
+$('halo').onchange = e => geo.setDrawRange(0, e.target.checked ? N : firstHalo);
+$('trail').onchange = e => { trail.visible = e.target.checked; };
+addEventListener('keydown', e => {
+	if (e.key === ' ') $('pause').click();
+	if (e.key === 'k') kick();
+	if (e.key === 'f') $('follow').click();
+});
+
+// kick: line up the vertical phase of every local star right now (all at z = 0 heading up)
+// then each one comes back at its own vertical frequency and they wind into a spiral
+function gauss() { return Math.sqrt(-2 * Math.log(Math.random() + 1e-12)) * Math.cos(TWO_PI * Math.random()); }
+function kick() {
+	for (let k = 0; k < N; k++) {
+		if (kind[k] === 1) th0[k][1] = -om[k][1] * t + 0.12 * gauss();
+	}
+}
+
+// ---------------- clicking a star ----------------
+const ray = new THREE.Raycaster();
+ray.params.Points.threshold = 0.35;
+let down = [0, 0];
+renderer.domElement.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerup', e => {
+	if (Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;    // that was a drag
+	ray.setFromCamera(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
+	const hit = ray.intersectObject(stars)[0];
+	if (hit) selectStar(hit.index);
+});
+
+const trailGeo = new THREE.BufferGeometry();
+const trail = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({ color: 0x66ffcc, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+trail.frustumCulled = false;
+scene.add(trail);
+function drawTrail() {
+	if (sel < 0) return;
+	// 2 Gyr of orbit, straight from the table
+	const n = 3000, tp = new Float32Array(3 * n), o = new Float32Array(4);
+	for (let i = 0; i < n; i++) {
+		starAt(sel, t + 2000 * i / (n - 1), o);
+		tp.set([o[0], o[1], o[2]], 3 * i);
+	}
+	trailGeo.setAttribute('position', new THREE.BufferAttribute(tp, 3));
+}
+
+async function selectStar(k) {
+	sel = k;
+	ring.visible = true;
+	drawTrail();
+	const J = meta.J[k], I = meta.info[k], per = om[k].map(w => (TWO_PI / Math.abs(w)).toFixed(0));
+	$('info').style.display = 'block';
+	$('info').innerHTML = `<b>${NAMES[kind[k]]}</b> #${k}${om[k][2] < 0 ? ' (goes backwards!)' : ''}<br>
+		actions J<sub>R</sub>, J<sub>z</sub>, J<sub>&phi;</sub> = ${J[0].toFixed(1)}, ${J[1].toFixed(1)}, ${J[2].toFixed(0)} kpc km/s<br>
+		periods: in-out ${per[0]} Myr, up-down ${per[1]} Myr, around ${per[2]} Myr<br>
+		R from ${I[1].toFixed(2)} to ${I[2].toFixed(2)} kpc, |z| up to ${I[3].toFixed(2)} kpc<br>
+		energy ${(I[0] / KMS / KMS / 1e4).toFixed(2)} &times; 10<sup>4</sup> (km/s)<sup>2</sup>`;
+	$('t4box').style.display = 'block';
+	$('t4fit').textContent = 'fitting the torus...';
+	const d = await (await fetch('/api/torus?id=' + k)).json();
+	if (sel !== k) return;
+	buildTorus(d);
+	$('t4fit').textContent = `refit live in ${d.ms.toFixed(0)} ms (flag ${d.flag}), drag to spin it`;
+}
+
+// ---------------- the 4d torus inset ----------------
+const r4 = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+r4.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+r4.setSize(340, 370);
+$('t4box').prepend(r4.domElement);
+const s4 = new THREE.Scene();
+const c4 = new THREE.PerspectiveCamera(42, 340 / 370, 0.01, 100);
+c4.position.set(0, 2.2, 4.9);
+const ctl4 = new OrbitControls(c4, r4.domElement);
+ctl4.enableDamping = true;
+ctl4.autoRotate = true;
+ctl4.autoRotateSpeed = 1.6;
+const dot = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: 0x66ffcc, depthTest: false }));
+dot.scale.set(0.42, 0.42, 1);
+dot.renderOrder = 2;
+s4.add(dot);
+let t4 = null;
+
+function buildTorus(d) {
+	if (t4) { s4.remove(t4.mesh, t4.wire); t4.mesh.geometry.dispose(); }
+	const M = d.M, n = M * M;
+	// squash each axis into [-1, 1] so the shape fills the box
+	const scale = a => { const lo = Math.min(...a), hi = Math.max(...a); return [(lo + hi) / 2, Math.max((hi - lo) / 2, 1e-9)]; };
+	const sR = scale(d.R), sz = scale(d.z), sv = scale(d.vR), sw = scale(d.vz), vzMax = Math.max(...d.vz.map(Math.abs));
+	const p3 = new Float32Array(3 * n), c3 = new Float32Array(3 * n), idx = [];
+	for (let i = 0; i < n; i++) {
+		// (R, vR) goes around the ring and (z, vz) goes around the tube, so every point is a real
+		// phase space point but you can actually see that its a donut
+		const rr = (d.R[i] - sR[0]) / sR[1], vr = (d.vR[i] - sv[0]) / sv[1];
+		const zz = (d.z[i] - sz[0]) / sz[1], ww = (d.vz[i] - sw[0]) / sw[1];
+		const a = Math.atan2(vr, rr), rho = 1.2 * Math.hypot(rr, vr) + 0.45 * zz;
+		p3.set([rho * Math.cos(a), 0.45 * ww, rho * Math.sin(a)], 3 * i);
+		const f = d.vz[i] / vzMax;    // blue going down, white, red going up
+		const c = f < 0 ? new THREE.Color(0.3 + 0.7 * (1 + f), 0.5 + 0.5 * (1 + f), 1) : new THREE.Color(1, 1 - 0.6 * f, 1 - 0.8 * f);
+		c3.set([c.r, c.g, c.b], 3 * i);
+	}
+	for (let a = 0; a < M; a++) for (let b = 0; b < M; b++) {
+		const q00 = a * M + b, q10 = ((a + 1) % M) * M + b, q01 = a * M + (b + 1) % M, q11 = ((a + 1) % M) * M + (b + 1) % M;
+		idx.push(q00, q10, q11, q00, q11, q01);
+	}
+	const g = new THREE.BufferGeometry();
+	g.setAttribute('position', new THREE.BufferAttribute(p3, 3));
+	g.setAttribute('color', new THREE.BufferAttribute(c3, 3));
+	g.setIndex(idx);
+	const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.8 }));
+	const wire = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.07 }));
+	s4.add(mesh, wire);
+	t4 = { mesh, wire, d, p3, M };
+}
+
+// where the selected star is on its 4d torus right now
+function dotOnTorus() {
+	if (!t4 || sel < 0) return;
+	const M = t4.M, p3 = t4.p3;
+	const u = ((((th0[sel][0] + om[sel][0] * t) % TWO_PI) + TWO_PI) % TWO_PI) / TWO_PI * M;
+	const v = ((((th0[sel][1] + om[sel][1] * t) % TWO_PI) + TWO_PI) % TWO_PI) / TWO_PI * M;
+	const i0 = Math.floor(u) % M, j0 = Math.floor(v) % M, i1 = (i0 + 1) % M, j1 = (j0 + 1) % M, fu = u - Math.floor(u), fv = v - Math.floor(v);
+	const q = [];
+	for (let c = 0; c < 3; c++) {
+		const a00 = p3[3 * (i0 * M + j0) + c], a10 = p3[3 * (i1 * M + j0) + c], a01 = p3[3 * (i0 * M + j1) + c], a11 = p3[3 * (i1 * M + j1) + c];
+		q.push((a00 * (1 - fu) + a10 * fu) * (1 - fv) + (a01 * (1 - fu) + a11 * fu) * fv);
+	}
+	dot.position.set(q[0], q[1], q[2]);
+}
+
+// ---------------- phase spiral inset ----------------
+const sc = $('snail').getContext('2d');
+const snailCol = [];
+for (let k = 0; k < N; k++) snailCol.push(kind[k] === 1 ? '#' + plasma(meta.J[k][1] / 45).getHexString() : null);
+function drawSnail(zs, vzs, ks) {
+	sc.fillStyle = '#05060e';
+	sc.fillRect(0, 0, 300, 300);
+	sc.strokeStyle = '#1d2850';
+	sc.beginPath(); sc.moveTo(150, 24); sc.lineTo(150, 296); sc.moveTo(4, 160); sc.lineTo(296, 160); sc.stroke();
+	sc.fillStyle = '#8a93b8';
+	sc.font = '10px system-ui';
+	sc.fillText('z', 286, 155);
+	sc.fillText('vz', 154, 34);
+	for (let i = 0; i < zs.length; i++) {
+		const x = 150 + zs[i] / 1.3 * 140, y = 160 - vzs[i] / 45 * 132;
+		sc.fillStyle = snailCol[ks[i]];
+		sc.fillRect(x - 1, y - 1, 2, 2);
+	}
+}
+
+// ---------------- the loop ----------------
+const o = new Float32Array(4), sunPos = new THREE.Vector3(), lastSun = new THREE.Vector3();
+let last = performance.now(), zs = [], vzs = [], ks = [];
+starAt(SUN, 0, o);
+lastSun.set(o[0], o[1], o[2]);
+function frame(now) {
+	const dt = Math.min((now - last) / 1000, 0.1);
+	last = now;
+	if (!paused) t += speed * dt;
+	zs.length = vzs.length = ks.length = 0;
+	for (let k = 0; k < N; k++) {
+		starAt(k, t, o);
+		pos[3 * k] = o[0]; pos[3 * k + 1] = o[1]; pos[3 * k + 2] = o[2];
+		if (kind[k] === 1) { zs.push(o[1]); vzs.push(o[3]); ks.push(k); }
+	}
+	geo.attributes.position.needsUpdate = true;
+	sun.position.set(pos[3 * SUN], pos[3 * SUN + 1], pos[3 * SUN + 2]);
+	if (sel >= 0) ring.position.set(pos[3 * sel], pos[3 * sel + 1], pos[3 * sel + 2]);
+	// follow the sun: drag the camera along with it, you can still orbit around
+	sunPos.copy(sun.position);
+	if (follow) {
+		const delta = sunPos.clone().sub(lastSun);
+		camera.position.add(delta);
+		controls.target.add(delta);
+	}
+	lastSun.copy(sunPos);
+	$('time').textContent = `t = ${t.toFixed(0)} Myr`;
+	drawSnail(zs, vzs, ks);
+	dotOnTorus();
+	controls.update();
+	ctl4.update();
+	renderer.render(scene, camera);
+	if (t4) r4.render(s4, c4);
+	requestAnimationFrame(frame);
+}
+addEventListener('resize', () => {
+	camera.aspect = innerWidth / innerHeight;
+	camera.updateProjectionMatrix();
+	renderer.setSize(innerWidth, innerHeight);
+});
+requestAnimationFrame(frame);
+
+// handy for poking at it from the console
+window.selectStar = selectStar;
+window.kick = kick;
+window.lab = { get t() { return t; }, set t(v) { t = v; }, sun: SUN, n: N };
+window.labReady = true;
+</script>
+</body>
+</html>

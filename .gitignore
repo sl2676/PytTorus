@@ -15,3 +15,6 @@ dist/
 *.swo
 *.bak
 .DS_Store
+
+# galaxy lab cache
+*.npz

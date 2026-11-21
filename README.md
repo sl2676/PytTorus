@@ -72,6 +72,16 @@ found, v1, v2 = T.containsPoint_Vel(x)              # the velocities the orbit h
 
 There is a longer example in `examples/torus_example.py`.
 
+## Galaxy Lab
+
+A 3D Milky Way you can fly around in where every star is on its own torus. Click a star to see its orbit and its torus in 4D phase space, or kick the disc and watch the phase spiral wind up.
+
+```bash
+PYTHONPATH=. python examples/galaxy_lab/galaxy_lab.py
+```
+
+Then open http://localhost:8000 in your browser. The first run fits about 2850 tori (on all your cores) and caches them, after that it starts right away.
+
 ## Running the Tests
 
 ```bash
