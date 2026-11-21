@@ -1,5 +1,10 @@
-include Torus/src/utils/*.h
-
-include Torus/src/utils/Numerics.templates
-include Torus/src/utils/*.cpp
-include src/utils/*.cpp
+include README.md LICENSE wrap.cpp
+recursive-include src *.cpp *.h
+recursive-include PytTorus/pot *.Tpot
+include Torus/LICENSE
+include Torus/src/*.h Torus/src/*.cc Torus/src/*.cpp
+recursive-include Torus/src/pot *.h *.cc
+recursive-include Torus/src/utils *.h *.cc *.templates
+include libebf_c_cpp-0.0.3/COPYING
+recursive-include libebf_c_cpp-0.0.3/include *.h *.hpp
+include libebf_c_cpp-0.0.3/src/cpp/*.cpp libebf_c_cpp-0.0.3/src/cpp/*.hpp

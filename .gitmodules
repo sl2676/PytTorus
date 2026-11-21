@@ -1,0 +1,3 @@
+[submodule "Torus"]
+	path = Torus
+	url = https://github.com/PaulMcMillan-Astro/Torus.git

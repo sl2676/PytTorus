@@ -1,4 +1,4 @@
-#include "../../Torus/src/utils/Units.h"
+#include "Units.h"
 using namespace Units;
 namespace py = pybind11;
 void init_units(py::module_ &torus) {
@@ -14,7 +14,7 @@ void init_units(py::module_ &torus) {
 	torus.attr("rad") = rad;
 	torus.attr("degree") = degree;
 	torus.attr("arcmin") = arcmin;
-	torus.attr("angsec") = angsec;
+	torus.attr("arcsec") = arcsec;
 		// length
 	torus.attr("mas") = mas;
 	torus.attr("anghr") = anghr;

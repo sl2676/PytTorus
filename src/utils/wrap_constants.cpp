@@ -1,4 +1,4 @@
-#include "../../Torus/src/utils/Constants.h"
+#include "Constants.h"
 using namespace GalactoConstants;
 namespace py = pybind11;
 
