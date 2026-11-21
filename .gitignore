@@ -1,17 +1,17 @@
-echo "
-# Ignore Python build artifacts
+# python build stuff
 *.pyc
-*.pyo
-*.pyd
 __pycache__/
 build/
 dist/
 *.egg-info/
+*.so
+*.o
+*.dylib
+.pytest_cache/
 
-# Ignore editor swap/backup files
+# editor swap/backup files and mac stuff
 *~
 *.swp
 *.swo
 *.bak
-" >> .gitignore
-
+.DS_Store
