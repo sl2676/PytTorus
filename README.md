@@ -90,6 +90,54 @@ for i in range(3):
 
 ```
 
+## Error handling
+
+Errors in the C++ code are raised as Python exceptions, so bad input does not end the Python process (or kill a Jupyter kernel):
+
+| Problem | Exception |
+| --- | --- |
+| Invalid input, e.g. `ln(-1.0)`, a root that is not bracketed (`rtsafe`, `zbrent`), a point outside a table, a singular or non-positive-definite matrix | `ValueError` |
+| An iterative routine that does not converge (`rtsafe`, `qbulir`, `zbrent`, `tqli`, `hqr`) | `RuntimeError` |
+| A fatal Torus error: `TorusError(msgs, index)` with `index < 0` | `TorusExcept`, a `RuntimeError` subclass with `.msgs` and `.index` |
+
+```python
+from PytTorus import _torus as torus
+
+try:
+    torus.ln(-1.0)
+except ValueError as e:
+    print(e)                # error in Mathematics: ln() of argument <= 0
+
+try:
+    torus.TorusError("boom", -1)
+except torus.TorusExcept as e:
+    print(e.msgs, e.index)  # boom -1
+```
+
+`CholeskyDecomposition`, `LUDecomposition`, `GaussJordan` and `GaussBack` raise `ValueError` instead of returning `-1`; they return `0` on success. As in Torus, `TorusError` with `index >= 0` is only a warning: it is printed, it sets `toruserrno`, and nothing is raised.
+
+### How Torus is patched
+
+Torus (the `Torus/` checkout of [PaulMcMillan-Astro/Torus](https://github.com/PaulMcMillan-Astro/Torus)) handles fatal errors by printing a message and calling `exit()`. This happens in `MathError()` (`WDMath.cc`), in `TorusError()` (`Err.h`) and in the `Cheby` constructor (`CHB.cc`). `Err.h` has an `_exception_handling_` switch that makes `TorusError()` throw instead, but the header `#undef`s it, so passing `-D_exception_handling_` has no effect on its own.
+
+Rather than maintain a fork or wait for an upstream release, PytTorus applies a small patch at build time, [`patches/torus-exception-handling.patch`](patches/torus-exception-handling.patch), which changes about 20 lines in 3 files:
+
+- `setup.py` copies `Torus/src/utils` into the build directory, applies the patch to the copy and compiles the copy with `-D_exception_handling_`. The `Torus/` checkout is not modified.
+- With `_exception_handling_` defined, `MathError()` throws `std::domain_error`, fatal `TorusError()` calls throw `TorusExcept` and `Cheby` throws `std::invalid_argument`. The extension raises these as the exceptions above. Without the define, the patched files behave exactly like upstream.
+- `TorusError()` still only warns for `index >= 0` and still sets `toruserrno`, because Torus' fitting code (`Fit.cc`) depends on that. Upstream's disabled exception branch would also throw on warnings, and it does not declare `toruserrno`, so `Fit.cc` does not compile with it.
+- The patch must apply exactly. If `Torus/` changes and the patch no longer matches, the build stops with an error. `src/utils/wrap_err.cpp` also refuses to compile against an unpatched `Err.h`.
+
+The patch could also be submitted upstream. Once Torus includes the change, delete the patch file and `BuildExtWithPatchedTorus` in `setup.py`.
+
+### Running the tests
+
+```bash
+python setup.py build_ext --inplace
+python -m pytest
+```
+
+Tests that exercise an error path each run in a separate interpreter, so a regression shows up as a failing test instead of ending the test run.
+
 ## Documentation
 
 For detailed documentation and usage examples, please visit our [documentation](https://pypi.org/project/PytTorus/0.0.2/).

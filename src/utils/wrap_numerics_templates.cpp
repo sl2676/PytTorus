@@ -2,14 +2,13 @@
 #include <algorithm>
 #include <cstdio>
 #include <complex>
+#include <sstream>
+#include <stdexcept>
 
 namespace py = pybind11;
 
-
-void Numerics_error(const char* msgs) {
-	std::cerr << "Error in Numerics: " << msgs << std::endl;
-	std::exit(1);
-}
+// Errors are thrown, never exit()ed: pybind11 raises std::invalid_argument as
+// ValueError (bad input) and std::runtime_error as RuntimeError (no convergence).
 
 py::object WDabs(const py::object& x) {
     if (py::isinstance<py::int_>(x)) {
@@ -76,8 +75,8 @@ py::object rtsafe(py::object funcd, const py::object x1, const py::object x2, co
     fh = result2[0];
     df = result2[1];
 
-    if (py::cast<double>(fl) * py::cast<double>(fh) >= 0.) 
-        Numerics_error("root must be bracketed in rtsafe");
+    if (py::cast<double>(fl) * py::cast<double>(fh) >= 0.)
+        throw std::invalid_argument("rtsafe: root must be bracketed");
     
     if (py::cast<double>(fl) < 0.) {
         xl = x1;
@@ -134,9 +133,8 @@ py::object rtsafe(py::object funcd, const py::object x1, const py::object x2, co
     }
 
     char msg[200];
-    sprintf(msg, "maximum number of iterations exceeded in rtsafe:\n%g %g %g %g\n", py::cast<double>(xl), py::cast<double>(xh), py::cast<double>(fl), py::cast<double>(fh));
-    Numerics_error(msg);
-    return rts;
+    std::snprintf(msg, sizeof msg, "rtsafe: maximum number of iterations exceeded (xl=%g, xh=%g, fl=%g, fh=%g)", py::cast<double>(xl), py::cast<double>(xh), py::cast<double>(fl), py::cast<double>(fh));
+    throw std::runtime_error(msg);
 }
 
 py::object rtsafe(const py::object& o, py::object funcd, const py::object x1, const py::object x2, const py::object xacc) {
@@ -151,8 +149,8 @@ py::object rtsafe(const py::object& o, py::object funcd, const py::object x1, co
     fh = result2.attr("f");
     df = result2.attr("df");
 
-    if (py::cast<double>(fl) * py::cast<double>(fh) >= 0.) 
-        Numerics_error("root must be bracketed in rtsafe");
+    if (py::cast<double>(fl) * py::cast<double>(fh) >= 0.)
+        throw std::invalid_argument("rtsafe: root must be bracketed");
     
     if (py::cast<double>(fl) < 0.) {
         xl = x1;
@@ -205,9 +203,8 @@ py::object rtsafe(const py::object& o, py::object funcd, const py::object x1, co
     }
 
     char msg[200];
-    sprintf(msg, "maximum number of iterations exceeded in rtsafe:\n%g %g %g %g\n", py::cast<double>(xl), py::cast<double>(xh), py::cast<double>(fl), py::cast<double>(fh));
-    Numerics_error(msg);
-    return rts;
+    std::snprintf(msg, sizeof msg, "rtsafe: maximum number of iterations exceeded (xl=%g, xh=%g, fl=%g, fh=%g)", py::cast<double>(xl), py::cast<double>(xh), py::cast<double>(fl), py::cast<double>(fh));
+    throw std::runtime_error(msg);
 }
 
 int hunt(const PyVector& xarr, const int n, const py::object x, const int j) {
@@ -260,17 +257,22 @@ int hunt(const PyVector& xarr, const int n, const py::object x, const int j) {
 
 void find(int& klo, const int n, const PyVector& x, const py::object xi) {
 	if (klo < 0 || klo > n-1 || x.__getitem__(klo) > xi || x.__getitem__(klo + 1) < xi) {
-		klo = int( py::cast<int>(xi - x.__getitem__(0)) / py::cast<int>((x.__getitem__(n-1)-x.__getitem__(0))) * (n-1) );
+		int range = py::cast<int>(x.__getitem__(n-1) - x.__getitem__(0));
+		if (range == 0) throw std::invalid_argument("find: x[0] == x[n-1]");  // would divide by zero
+		klo = int( py::cast<int>(xi - x.__getitem__(0)) / range * (n-1) );
 		if (klo < 0 || klo >=n) {
-			std::cerr << ' ' << xi << ' ' << x.__getitem__(0) << ' ' << x.__getitem__(n-1);
-			Numerics_error("Find: x out of range");		
-		}	
+			std::ostringstream msg;
+			msg << "find: x out of range (xi = " << xi << ", x[0] = " << x.__getitem__(0) << ", x[n-1] = " << x.__getitem__(n-1) << ")";
+			throw std::invalid_argument(msg.str());
+		}
 	}
 }
 
 int find_for_polev(int& j, const int n, const int m, const PyVector& x, const py::object xi) {
 	int M = m;
-	j = int( py::cast<int>(xi - x.__getitem__(0)) / py::cast<int>(x.__getitem__(n-1) - x.__getitem__(0)) * (n-1) );
+	int range = py::cast<int>(x.__getitem__(n-1) - x.__getitem__(0));
+	if (range == 0) throw std::invalid_argument("find_for_polev: x[0] == x[n-1]");  // would divide by zero
+	j = int( py::cast<int>(xi - x.__getitem__(0)) / range * (n-1) );
 	j = hunt(x, n, xi, j) - (m+1)/2 + 1;
 	if (j >= 0 && j < n && x.__getitem__(j) == xi) M = 1;
 	else if (j < 0) j = 0;
@@ -290,7 +292,7 @@ py::object polint(const PyVector& xa, const PyVector& ya, const int n, const py:
 	for (i = 0; i < n; i++) p.__setitem__(py::cast<int>(p.__getitem__(i)), ya.__getitem__(i));
 	for (m = 1; m < n; m++)
 	for (i = 0; i < n - m; i++) {
-		if (xa.__getitem__(i) == xa.__getitem__(i+m)) Numerics_error("x's not distinct in polint");
+		if (xa.__getitem__(i) == xa.__getitem__(i+m)) throw std::invalid_argument("polint: x values are not distinct");
 		p.__setitem__(i, ( (x-xa.__getitem__(i+m) * p.__getitem__(i) + 
 							(xa.__getitem__(i) - x) * (p.__getitem__(i+1)) /
 							(xa.__getitem__(i) - xa.__getitem__(i+m))
@@ -550,7 +552,7 @@ void spline(const PyVector& x, const PyVector& y, const int n, )
 py::object splint(const PyVector& x, const PyVector& y, const PyVector& y2, const py::object xi, py::object dy, py::object d2y) {
 	double zero = 0., one = 1., three = 3., six = 6.;
 	py::object h, h6, A, B;
-	if ((h=x.__getitem__(1)-x.__getitem__(0)) == py::cast(zero)) Numerics_error("splint bad X input");	
+	if ((h=x.__getitem__(1)-x.__getitem__(0)) == py::cast(zero)) throw std::invalid_argument("splint: bad x input");
 	h6 = h / py::cast(six);
 	A = (x.__getitem__(1)-xi) / h;
 	B = py::cast(one) - A;

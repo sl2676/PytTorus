@@ -1,0 +1,130 @@
+PytTorus build-time patch for Torus (https://github.com/PaulMcMillan-Astro/Torus),
+made against commit 0e8ac96, the commit the Torus/ submodule points to.
+
+Upstream reports fatal errors by printing a message and calling exit(), which
+kills the Python interpreter. setup.py applies this patch to a copy of
+Torus/src/utils in the build directory and compiles with -D_exception_handling_,
+so these errors throw C++ exceptions instead, and PytTorus turns those into
+Python exceptions:
+
+  Err.h      Stop #undef-ing _exception_handling_. When it is defined,
+             TorusError() throws TorusExcept for fatal errors (i < 0).
+             Warnings (i >= 0) still print and set toruserrno, which Fit.cc
+             relies on. Upstream's old exception branch threw for warnings
+             too and did not declare toruserrno.
+  WDMath.cc  MathError() throws std::domain_error.
+  CHB.cc     Cheby(x, y, np, N) throws std::invalid_argument for N > 50
+             (it called exit(0)).
+
+Without _exception_handling_ the patched files behave exactly like upstream.
+To apply to an upstream checkout: git apply torus-exception-handling.patch
+
+diff --git a/src/utils/CHB.cc b/src/utils/CHB.cc
+index ac20e79..cef310e 100755
+--- a/src/utils/CHB.cc
++++ b/src/utils/CHB.cc
+@@ -14,6 +14,7 @@
+ #include "Pi.h"
+ #include "CHB.h"
+ #include <cstdlib>
++#include <stdexcept>
+ 
+ using std::cerr;
+ 
+@@ -94,7 +95,13 @@ Cheby::Cheby(const Cheby& Ch) {
+ ////////////////////////////////////////////////////////////////////////////////
+ Cheby::Cheby(double * x, double * y, const int np, const int N) {
+   NChb = N;
+-  if(NChb>50) { cerr << "too many coeffs in Cheby\n"; std::exit(0); }
++  if(NChb>50) {
++#ifdef _exception_handling_
++    throw std::invalid_argument("too many coeffs in Cheby");
++#else
++    cerr << "too many coeffs in Cheby\n"; std::exit(0);
++#endif
++  }
+   s = 0;
+   getchebc();
+   e1 = new double[NChb];
+diff --git a/src/utils/Err.h b/src/utils/Err.h
+index 356bd0a..8623732 100644
+--- a/src/utils/Err.h
++++ b/src/utils/Err.h
+@@ -24,8 +24,9 @@ Barely used, in truth
+ #include <string>
+ using std::string;
+ 
+-#undef _exception_handling_   // change this if your compiler does allow
+-			      // for C++ exception handling
++// Define _exception_handling_ (e.g. compile with -D_exception_handling_) to make
++// fatal errors (i<0) throw TorusExcept instead of calling exit(1). Warnings
++// (i>=0) are the same either way: they set toruserrno and print a message.
+ 
+ struct TorusExcept {
+   string msgs;
+@@ -34,20 +35,6 @@ struct TorusExcept {
+   TorusExcept(string m, int i) : msgs(m), index(i) {}
+ };
+ 
+-#ifdef  _exception_handling_
+-
+-//inline void TorusError(char* m, int i)
+-//{
+-//    throw TorusExcept(m,i);
+-//}
+-
+-inline void TorusError(string m, int i)
+-{
+-    throw TorusExcept(m,i);
+-}
+-
+-#else
+-
+ #include <iostream>
+ using std::cerr;
+ 
+@@ -72,12 +59,14 @@ inline void TorusError(string m, int i)
+ {
+     toruserrno = i;
+     if(i<0) {
++#ifdef  _exception_handling_
++        throw TorusExcept(m,i);
++#else
+         cerr<<" ERROR: "<<m<<'\n';
+         exit(1);
++#endif
+     } else
+         cerr<<" WARNING: "<<m<<'\n';
+ }
+ 
+ #endif
+-
+-#endif
+diff --git a/src/utils/WDMath.cc b/src/utils/WDMath.cc
+index 3523a54..92bf9ca 100644
+--- a/src/utils/WDMath.cc
++++ b/src/utils/WDMath.cc
+@@ -20,6 +20,8 @@ using std::cerr;
+ #include "Pi.h"
+ #include "WDMath.h"
+ #include <cstdlib>
++#include <stdexcept>
++#include <string>
+ 
+ //extern "C" void exit();
+ 
+@@ -98,10 +100,14 @@ static void gcf(double& gammcf, double a, double x, double& lng)
+ 
+ void MathError(const char* msgs)
+ {
++#ifdef _exception_handling_
++    throw std::domain_error(std::string("error in Mathematics: ") + msgs);
++#else
+     cerr<<" error in Mathematics: "<<msgs<<'\n';
+ #ifndef ebug
+     exit(1);
+ #endif
++#endif
+ }
+ 
+ void MathWarning(const char* msgs)

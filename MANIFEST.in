@@ -3,3 +3,4 @@ include Torus/src/utils/*.h
 include Torus/src/utils/Numerics.templates
 include Torus/src/utils/*.cpp
 include src/utils/*.cpp
+include patches/*.patch

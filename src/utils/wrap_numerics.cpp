@@ -21,10 +21,10 @@ double sanitizePrecision(double value, double threshold = 1e-9) {
 	return value;
 }
 
-int Numerics_message(const char* msgs) {
-	std::cerr << "ERROR in Numerics: " << msgs << '\n';
-	return -1;
-}
+// Errors are thrown rather than printed and returned as -1: pybind11 raises
+// std::invalid_argument as ValueError (bad input, e.g. a singular matrix) and
+// std::runtime_error as RuntimeError (e.g. no convergence). Functions that
+// return int return 0 on success.
 
 
 int GaussJordan(PyMatrix& a, int n, PyMatrix& b, int m) {
@@ -49,13 +49,13 @@ int GaussJordan(PyMatrix& a, int n, PyMatrix& b, int m) {
                             icol = k;
                         }
                     } else if (ipiv[k] > 1) {
-                        return -1;  
+                        throw std::invalid_argument("GaussJordan: singular matrix");
                     }
                 }
             }
         }
 
-        if (irow < 0 || icol < 0) return -1;  
+        if (irow < 0 || icol < 0) throw std::invalid_argument("GaussJordan: singular matrix (no pivot found)");
 
         ++(ipiv[icol]);
 
@@ -76,7 +76,7 @@ int GaussJordan(PyMatrix& a, int n, PyMatrix& b, int m) {
         indxc[i] = icol;
 
         double piv = py::cast<double>(a.getValueAt(icol, icol));
-        if (piv == 0.0) return -1;  
+        if (piv == 0.0) throw std::invalid_argument("GaussJordan: singular matrix");
 
         double pivinv = 1.0 / piv;
 		if (std::abs(pivinv) < 1e-10) {
@@ -145,13 +145,13 @@ int GaussJordanVec(PyMatrix& a, const int n, PyVector& b) {
                             icol = k;
                         }
                     } else if (ipiv[k] > 1) {
-                        return Numerics_message("Singular Matrix 1");
+                        throw std::invalid_argument("GaussJordan: singular matrix");
                     }
                 }
             }
         }
 
-        if (irow < 0 || icol < 0) return Numerics_message("No valid pivot found");
+        if (irow < 0 || icol < 0) throw std::invalid_argument("GaussJordan: singular matrix (no pivot found)");
 
         ++(ipiv[icol]);
 
@@ -168,7 +168,7 @@ int GaussJordanVec(PyMatrix& a, const int n, PyVector& b) {
 
         double piv = py::cast<double>(a.getValueAt(icol, icol));
         if (std::abs(piv) < 1e-10) {
-            return Numerics_message("Matrix is singular or nearly singular");
+            throw std::invalid_argument("GaussJordan: matrix is singular or nearly singular");
         }
 
         double pivinv = 1.0 / piv;
@@ -225,7 +225,7 @@ int GaussBack(PyMatrix& a, const int n, PyVector& b) {
             }
         }
         if (py::cast<double>(a.getValueAt(irow, i)) == 0.0) {
-            return Numerics_message("GaussBack: Singular Matrix");
+            throw std::invalid_argument("GaussBack: singular matrix");
         }
 
         if (irow != i) {
@@ -364,7 +364,9 @@ double qbulir(std::function<double(double)> func, double a, double b, double eps
     }
     v = tab * eta;
     if (err < v) err = v;
-    if (m == mx) Numerics_message("qbulir exceeding maximum of iterations");
+    // The loop only runs to the end (leaving m == mx + 1) if it never converged.
+    // (Torus tests m == mx here, which is true only when it converged on the last step.)
+    if (m > mx) throw std::runtime_error("qbulir: maximum number of iterations exceeded");
 
     c = sanitizePrecision(c);
     return roundIfCloseToInteger(c);
@@ -472,7 +474,7 @@ double zbrent(std::function<double(double)> func, const double x1, const double 
     fa = func(a = x1);
     fb = func(b = x2);
     if ((fa > 0. && fb > 0.) || (fa < 0. && fb < 0.))
-        throw std::runtime_error("zbrent: root must be bracketed");
+        throw std::invalid_argument("zbrent: root must be bracketed");
 
     fc = fb;
     while (iter++ < itmax) {
@@ -688,11 +690,11 @@ int hunt(const PyVector& x, const int n, const double xx, int jlo) {
 
 double qsplin(PyVector& x, PyVector& y, PyVector& y2, const int n, const double al, const double x1, const double x2) {
     if (x1 == x2) return 0.0;
-    if ((x.__getitem__(n-1).cast<double>() - x1) * (x1 - x.__getitem__(0).cast<double>()) < 0.0) Numerics_message("qsplin: x1 not in range");
-    if ((x.__getitem__(n-1).cast<double>() - x2) * (x2 - x.__getitem__(0).cast<double>()) < 0.0) Numerics_message("qsplin: x2 not in range");
-    if (x1 > x2) Numerics_message("qsplin: x1 > x2");
-    if (x1 < 0.0 && al < 0.0) Numerics_message("qsplin: integral complex");
-    if (x1 == 0.0 && al <= -1.0) Numerics_message("qsplin: integral diverging");
+    if ((x.__getitem__(n-1).cast<double>() - x1) * (x1 - x.__getitem__(0).cast<double>()) < 0.0) throw std::invalid_argument("qsplin: x1 not in range");
+    if ((x.__getitem__(n-1).cast<double>() - x2) * (x2 - x.__getitem__(0).cast<double>()) < 0.0) throw std::invalid_argument("qsplin: x2 not in range");
+    if (x1 > x2) throw std::invalid_argument("qsplin: x1 > x2");
+    if (x1 < 0.0 && al < 0.0) throw std::invalid_argument("qsplin: integral complex");
+    if (x1 == 0.0 && al <= -1.0) throw std::invalid_argument("qsplin: integral diverging");
 
     int i, k;
     double q = 0.0, ali, ali1, h, h2, t, xl, xh;
@@ -704,7 +706,7 @@ double qsplin(PyVector& x, PyVector& y, PyVector& y2, const int n, const double 
         xl = std::max(x.__getitem__(k).cast<double>(), x1);
         xh = std::min(x.__getitem__(k+1).cast<double>(), x2);
         h = x.__getitem__(k+1).cast<double>() - x.__getitem__(k).cast<double>();
-        if (h == 0.0) Numerics_message("qsplin: bad x input");
+        if (h == 0.0) throw std::invalid_argument("qsplin: bad x input");
         h2 = h * h;
         a[0] = x.__getitem__(k+1).cast<double>() * y.__getitem__(k).cast<double>() - x.__getitem__(k).cast<double>() * y.__getitem__(k+1).cast<double>() + x.__getitem__(k).cast<double>() * x.__getitem__(k+1).cast<double>() / 6.0 *
                ((x.__getitem__(k+1).cast<double>() + h) * y2.__getitem__(k).cast<double>() - (x.__getitem__(k).cast<double>() - h) * y2.__getitem__(k+1).cast<double>());
@@ -741,7 +743,7 @@ int CholeskyDecomposition(PyMatrix& a, const int n) {
             }
             if (i == j) {
                 if (sum <= 0.0) {
-                    return Numerics_message("CholeskyDecomposition: Matrix not positive definite");
+                    throw std::invalid_argument("CholeskyDecomposition: matrix not positive definite");
                 }
                 a.set_value(i, i, py::float_(sqrt(sum)));
             } else {
@@ -836,7 +838,7 @@ int LUDecomposition(PyMatrix& a, const int n, PyVector& indx, int& d) {
             big = std::max(big, std::abs(py::cast<double>(a.getValueAt(i, j))));
         }
         if (big == 0.0) {
-            return Numerics_message("LUDecomposition: singular matrix");
+            throw std::invalid_argument("LUDecomposition: singular matrix");
         }
         vv[i] = 1.0 / big;
     }
@@ -904,7 +906,11 @@ double LUDet3(PyMatrix& A) {
         }
     }
 
-    LUDecomposition(AA, n, indx, d);
+    try {
+        LUDecomposition(AA, n, indx, d);
+    } catch (const std::invalid_argument&) {
+        return 0.0;  // LUDecomposition rejects a matrix with a row of zeros; its determinant is 0
+    }
 
     double D = static_cast<double>(d);
 		for (int i = 0; i < n; ++i) {
@@ -1439,7 +1445,7 @@ double LevMar(PyVector& x, PyVector& y, PyVector& sig, const int N, PyVector& a,
 }
 
 inline double gauss_fit(const double x, PyVector& p, PyVector& df, const int D) {
-    if (D != 3) Numerics_message("FitGauss: D != 3");
+    if (D != 3) throw std::invalid_argument("gauss_fit: D must be 3");
 
     double fg, tm;
     tm = (x - py::cast<double>(p.__getitem__(1))) / py::cast<double>(p.__getitem__(2));

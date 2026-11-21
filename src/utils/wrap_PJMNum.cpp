@@ -1,5 +1,6 @@
 #include <vector>
 #include <cmath>
+#include <stdexcept>
 namespace py = pybind11;
 
 double trapzd(double(*func)(double), const double a, const double b, const int n) {
@@ -40,10 +41,7 @@ void polint(PyVector& xa, PyVector& ya, const int n, const double x, double &y, 
             double hp = xa.__getitem__(i + m).cast<double>() - x;
             double w = c[i + 1] - d[i];
             double den = ho - hp;
-            if (den == 0.0) {
-                std::cerr << "Error in polint\n";
-                return; 
-            }
+            if (den == 0.0) throw std::invalid_argument("polint: x values are not distinct");
             den = w / den;
             d[i] = hp * den;
             c[i] = ho * den;

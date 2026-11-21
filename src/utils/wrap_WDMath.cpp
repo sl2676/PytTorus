@@ -1,3 +1,5 @@
+// MathError() comes from the patched WDMath.cc that setup.py builds: it throws
+// std::domain_error (raised in Python as ValueError) instead of calling exit(1).
 #include "../../Torus/src/utils/WDMath.h"
 
 namespace py = pybind11;
@@ -61,7 +63,8 @@ void init_wdmath(py::module_ &torus) {
 		// misc func
 	torus.def("gser", &gser);
 	torus.def("gcf", &gcf);
-	torus.def("MathError", &MathError);
+	torus.def("MathError", &MathError, py::arg("msgs"),
+		"Raise ValueError('error in Mathematics: <msgs>'), as Torus' math functions do for invalid arguments.");
 	torus.def("MathWarning", &MathWarning);
 	torus.def("SphVol", &SphVol);
 		// logs and exps func
