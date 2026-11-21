@@ -1,143 +1,118 @@
 # PytTorus ~ Torus Mapper Python Package
 
-[![PyPI version](https://badge.fury.io/py/torus-mapper.svg)](https://badge.fury.io/py/torus-mapper)
+[![PyPI version](https://badge.fury.io/py/PytTorus.svg)](https://badge.fury.io/py/PytTorus)
 
 ## Overview
 
-**PytTorus** is a Python package designed to model the dynamics of galaxies using the torus mapping method. The core functionality is implemented in **C++** for high performance, and exposed to Python using **pybind11**. This combination ensures both computational efficiency and user-friendly interaction for scientific computing tasks.
+**PytTorus** is a Python package for modeling the dynamics of galaxies using the torus mapping method. It wraps the **Torus Mapper**, the **C++** code by Paul McMillan and James Binney, and exposes it to Python using **pybind11**. The heavy lifting stays in C++ and everything goes in and comes out as **numpy** arrays.
 
-The package allows users to compute orbital tori based on action integrals and provides robust tools for analyzing orbits in dynamical systems. By utilizing C++ for the heavy numerical operations and Python for high-level scripting, allows for ease of use without the trade off of performance. 
+Given a gravitational potential and a set of actions (J_R, J_z, J_phi), PytTorus fits the orbital torus with those actions. Once the torus is fitted the whole orbit is known, so you can get a star's position and velocity at any angles without integrating anything.
 
 ## Key Features
 
-- Efficient computation of orbital tori using **C++** back-end for performance-critical tasks.
-- Python bindings implemented via **pybind11**, providing an intuitive interface for Python users.
-- Custom **C++** matrix and vector operations, optimized for handling various data types and large-scale computations.
-- Time-averaged density and velocity calculations, ideal for N-body simulations and resonance trapping studies.
-- Flexibility in setting up initial conditions for dynamical models, with a focus on astronomical applications.
+- Fit orbital tori for given actions in an axisymmetric potential with `Torus.AutoFit`.
+- Map angles to positions and velocities (`Map3D`) for one point or thousands at once.
+- Orbital frequencies, energy, and the radial and vertical extent of the orbit.
+- Check if an orbit passes through a point and get the velocities it has there (`containsPoint`, `containsPoint_Vel`).
+- Potentials: isochrone, Kepler, logarithmic, Miyamoto-Nagai, Stackel, sums of them, and the GalPot Milky Way models that come with Torus (McMillan 2011 and 2017, Binney & Tremaine, Dehnen & Binney 1998, Piffl et al 2014).
+- Save and load tori in EBF files.
+- Errors in the C++ code raise Python exceptions (`PytTorus.TorusError`) instead of killing Python.
+- Some of the Torus numerics: Gauss-Legendre quadrature, Bulirsch-Stoer integration, Brent root finding, Legendre polynomials, Bessel and gamma functions.
 
 ## Installation
 
-Install the package using pip:
+Torus is a git submodule, so clone with `--recursive`:
 
 ```bash
-pip install PytTorus
+git clone --recursive https://github.com/sl2676/PytTorus.git
+cd PytTorus
+pip install .
 ```
+
+If you already cloned without `--recursive`, run `git submodule update --init` first. You need a C++17 compiler (GCC or clang, Linux or macOS).
+
 ## Getting Started
 
-Below is an example of how to use the package to perform Cholesky Decomposition:
+Torus works in kpc, Myr and solar masses, so velocities are in kpc/Myr and actions are in kpc^2/Myr. `PytTorus.kms` converts from km/s.
+
+Below is an example of how to use the package to fit a torus in a logarithmic potential and get the positions and velocities around the orbit:
 
 ```python
-import PytTorus
-from PytTorus import _torus as torus
+import numpy as np
+import PytTorus as p
 
-A = torus.Matrix(3, 3)
-a_data = [[4.0, 12.0, -16.0], [12.0, 37.0, -43.0], [-16.0, -43.0, 98.0]]
-N = 3
+phi = p.LogPotential(220 * p.kms, 0.9, 0.0)    # v0, flattening q, core radius
 
-for i in range(len(a_data)):
-  A.set_row(i, torus.Vector(a_data[i]))
-print(A)
+J = np.array([0.05, 0.02, 1.6])                 # JR, Jz, Jphi in kpc^2/Myr
+T = p.Torus()
+flag = T.AutoFit(J, phi)                        # 0 means the fit worked
+print(T, flag)
+print("frequencies:", T.omega())
 
-result = torus.CholeskyDecomposition(A, N)
-print("Result of Cholesky Decomposition: ", result)
-print("Decomposed Matrix L (lower triangular):\n", A)
+th = np.random.uniform(0, 2 * np.pi, (1000, 3))     # angles
+w = T.Map3D(th)                                      # (R, z, phi, vR, vz, vphi) for each one
 ```
-Below is an example of how to use the package to simulate the motion of a projectile in a 3D space by numerically integrating the Vector:
+
+Below is an example of how to use the package to fit the orbit of a sun-like star in the McMillan (2017) Milky Way potential:
 
 ```python
-import PytTorus
-from PytTorus import _torus as torus
+import numpy as np
+import PytTorus as p
 
-g = 9.8        # Gravitational constant
+mw = p.galpot("PJM16_best")                         # p.pot_files() lists all of them
+J = np.array([30.0, 10.0, 1900.0]) * p.kms          # kpc km/s -> kpc^2/Myr
 
-# Initial velocities in 3D (x, y, z components)
-v0x = 10.0
-v0y = 20.0
-v0z = 15.0
+T = p.Torus()
+T.AutoFit(J, mw)
+print("periods (Myr):", 2 * np.pi / T.omega())
 
-# Set the integration bounds and accuracy
-a = 0.0
-b = 2.0
-eps = 1e-6
-
-def x_position(t):
-	return v0x * t
-
-def y_position(t):
-	return v0y * t - 0.5 * g * t * t
-
-def z_position(t):
-	return v0z * t
-
-def integrate_vector(funcs, a, b, eps):
-	n = len(funcs)
-	vector = torus.Vector(0.0, 0.0, 0.0)
-	err = 0.0    # Error placeholder
-	
-	for i in range(n):
-		vector.__setitem__(i, torus.qbulir(funcs[i], a, b, eps, err))
-		print(f"Component {i} integrated result: {vector[i]}, error: {err}")
-	return vector
-
-
-position_funcs = [x_position, y_position, z_position]
-result_vector = integrate_vector(position_funcs, a, b, eps)
-
-print(f"\nProjectile's position at t = {b} seconds:")
-for i in range(3):
-    print(f"Component {i}: {result_vector[i]} meters")
-
+x = T.Map3D([0.0, 0.0, 0.0])[:3]                    # a point on the orbit
+found, v1, v2 = T.containsPoint_Vel(x)              # the velocities the orbit has there
 ```
+
+There is a longer example in `examples/torus_example.py`.
+
+## Running the Tests
+
+```bash
+pip install pytest
+python -m pytest tests
+```
+
+The tests check the numerics against numpy, the circular speed of the McMillan (2017) potential, the isochrone torus against the exact energy, and that energy and angular momentum stay constant around a fitted torus.
 
 ## Documentation
 
-For detailed documentation and usage examples, please visit our [documentation](https://pypi.org/project/PytTorus/0.0.2/).
+Every function has a docstring (`help(p.Torus)`). The [PytTorus docs](https://github.com/sl2676/PytTorus-Docs) cover the old 0.0.x API and still need updating for 0.1. The original Torus documentation is in `Torus/` and `torus_mapper_doc.pdf`.
 
 ## Applications
 
-PytTorus is a versatile tool with numerous applications in astrophysics and computational dynamics. Below are some common use cases:
-
 ### 1. Galactic Dynamics Modeling
-PytTorus can be used to model the orbital structure of galaxies based on their gravitational potentials. This is useful for:
-- Simulating star orbits within axisymmetric and triaxial potentials.
-- Investigating the long-term evolution of galactic structures.
-- Mapping the motion of stars in both external galaxies and our own Milky Way.
-- Comparing simulation results with observational data, such as from Gaia and other space missions.
+- Orbits of stars in axisymmetric potentials, including realistic Milky Way models.
+- Comparing orbits between different Milky Way potentials.
 
-### 2. N-body Simulations
-The package provides tools for generating initial conditions for N-body simulations, often used in galactic dynamics and cosmological simulations. Applications include:
-- Setting up dynamically consistent initial conditions for N-body simulations of disk, bulge, and halo components of galaxies.
-- Avoiding discreteness noise, which can affect results in traditional N-body setups.
-- Constructing equilibrium models that can be refined with observational data.
+### 2. Orbits Without Time-Steppers
+- A star's position and velocity at any angles straight from the torus, no orbit integration.
+- Orbital frequencies and periods directly from the actions.
 
-### 3. Resonance Trapping Studies
-PytTorus excels at studying the phenomenon of resonance trapping:
-- Investigating how stars get caught in resonances within rotating galactic potentials.
-- Analyzing the influence of resonances on the long-term behavior of stellar orbits.
-- Using the angle-action framework to explore resonant and near-resonant structures.
+### 3. Action-Based Models
+- Building samples of stars from distributions in action space.
+- Finding the velocities an orbit has at a given position, which is what you need to compare models to observed stars.
 
-### 4. Numerical Solutions in Astrophysics
-The package provides high-precision methods for calculating orbits without needing to use time-steppers:
-- Directly computing a star’s position and velocity at any point in time, allowing for efficient orbit integrations.
-- Calculating time-averaged densities, which are useful in theoretical studies of galactic dynamics.
-- Supporting the development of distribution functions based on actions, used for creating accurate galaxy models.
+## TODO
 
-### 5. Stellar Stream Analysis
-The package is also capable of helping with stellar stream studies:
-- Modeling the phase-space distribution of disrupted star clusters or dwarf galaxies as stellar streams.
-- Analyzing the impact of galactic potentials on the dynamics of stellar streams over time.
-- Facilitating comparison between simulation results and observed streams like the Sagittarius Stream.
-
-### 6. Academic Research
-PytTorus provides a rich platform for academic research in various fields:
-- Cosmological simulations for galaxy formation and structure evolution.
-- Studies of dark matter distributions by comparing simulated and observed galactic kinematics.
-- Generating precise, scalable models that can be used to validate theoretical predictions in galactic dynamics.
-
+- resonant tori (resTorus)
+- potentials written in Python
+- coordinate transforms (PJMCoords) for working with Gaia data
+- distribution functions
+- surfaces of section
 
 ## Citation
 
 If you use this package for academic research, please cite the original paper:
 
-Binney, J., & McMillan, P. J. (2015). Torus Mapper: A Code for Dynamical Models of Galaxies. MNRAS, 000(000), 000-000
+Binney, J., & McMillan, P. J. (2016). Torus Mapper: a code for dynamical models of galaxies. MNRAS, 456, 1982-1998
+
+## License
+
+GPL-2.0, same as Torus (see `LICENSE`). The EBF library in `libebf_c_cpp-0.0.3` has its own license (`libebf_c_cpp-0.0.3/COPYING`).
